@@ -109,7 +109,10 @@ function wg_config_bootstrap() {
 
 function wg_peer_add() {
   local name="$1"
-  local allowed_ip="${2:-0.0.0.0/0}"
+  local address="$2"
+  local allowed_ip="${3:-0.0.0.0/0}"
+
+  _set ".spec.peers.${name}.address" "$address"
 
   if [[ "$(_get ".spec.peers.${name}.credential.key")" == "null" ]]; then
     _set ".spec.peers.${name}.credential.key" "$(wg genkey)"
@@ -128,7 +131,7 @@ function wg_server_address() {
   _set ".spec.server.address" "$address"
 }
 
-function wg_server_consolidate() {
+function wg_consolidate_wg0() {
   SERVER_ADDRESS=$(_get ".spec.server.address")
   SERVER_PORT=$(_get ".spec.server.port")
   SERVER_CRED_KEY=$(_get ".spec.server.credential.key")
@@ -139,8 +142,6 @@ function wg_server_consolidate() {
 Address = ${SERVER_ADDRESS}
 ListenPort = ${SERVER_PORT}
 PrivateKey = ${SERVER_CRED_KEY}
-#PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE  # Optional: Setup forwarding for internet access
-#PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE  # Cleanup forwarding
 INTERFACE
 
   # transform flattened peers list into array
@@ -161,6 +162,46 @@ PersistentKeepalive = 25
 PEER
   done
 
+  echo "wg0.conf ================================================================"
+  cat /etc/wireguard/wg0.conf
+  echo "========================================================================="
+}
+
+function wg_consolidate_clients() {
+  SERVER_ENDPOINT=$(_get ".spec.server.endpoint")
+  SERVER_PORT=$(_get ".spec.server.port")
+  SERVER_CRED_PUB=$(_get ".spec.server.credential.pub")
+
+  IFS=' ' read -r -a PEERS <<< $(_flatten_keys ".spec.peers")
+
+  for PEER in "${PEERS[@]}"; do
+    PEER=$(echo $PEER | sed 's/"//g')
+    ADDRESS=$(_get ".spec.peers.${PEER}.address")
+    CRED_KEY=$(_get ".spec.peers.${PEER}.credential.key")
+    CRED_PUB=$(_get ".spec.peers.${PEER}.credential.pub")
+    ALLOWED_IPS=$(_get ".spec.peers.${PEER}.allowed_ips")
+
+    echo ":: peer => $PEER"
+    echo "========================================================================="
+    envsubst <<PEER
+[Interface]
+Address = ${ADDRESS}
+PrivateKey = ${CRED_KEY}
+
+[Peer]
+PublicKey = ${SERVER_CRED_PUB}
+Endpoint = ${SERVER_ENDPOINT}:${SERVER_PORT}
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+PEER
+    echo "========================================================================="
+  done
+}
+
+function wg_server_endpoint() {
+  local endpoint="$1"
+
+  _set ".spec.server.endpoint" "$endpoint"
 }
 
 function wg_server_port() {
@@ -197,7 +238,7 @@ usage() { local RC="${1:-0}"
     echo "Usage: ${0##*/} [-opt] [command]
 Options (fields in '[]' are optional, '<>' are required):
     -h          This help
-    -p \"<name>[;allowed_ip]\"
+    -p \"<name;address>[;allowed_ip]\"
                 Configure a peer
                 required arg: \"<name>\"
                 NOTE: for optional values, just leave blank
@@ -211,11 +252,12 @@ The 'command' (if provided and valid) will be run instead of supervisord
 wg_config_bootstrap
 _del ".peer.list"
 
-while getopts ":ha:b:p:" opt; do
+while getopts ":ha:b:e:p:" opt; do
     case "$opt" in
         h) usage ;;
         a) eval wg_server_address $OPTARG ;;
         b) eval wg_server_port $OPTARG ;;
+        e) eval wg_server_endpoint $OPTARG ;;
         p) eval wg_peer_add $(sed 's/^/"/; s/$/"/; s/;/" "/g' <<< $OPTARG) ;;
         "?") echo "Unknown option: -$OPTARG"; usage 1 ;;
         ":") echo "No argument value for option: -$OPTARG"; usage 2 ;;
@@ -223,10 +265,8 @@ while getopts ":ha:b:p:" opt; do
 done
 shift $(( OPTIND - 1 ))
 
-wg_server_consolidate
-echo "wg0.conf ================================================================"
-cat /etc/wireguard/wg0.conf
-echo "========================================================================="
+wg_consolidate_wg0
+wg_consolidate_clients
 
 nginx-setup
 
