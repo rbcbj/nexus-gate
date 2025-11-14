@@ -1,8 +1,8 @@
 #!/bin/sh
 
 # Set up WireGuard interface
-ip link add wg0 type wireguard
-ip link set wg0 up
+#ip link add wg0 type wireguard
+#ip link set wg0 up
 
 # Configure WireGuard based on the config file
 wg-quick up wg0
