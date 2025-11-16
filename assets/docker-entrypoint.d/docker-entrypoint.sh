@@ -293,7 +293,6 @@ shift $(( OPTIND - 1 ))
 
 wg_consolidate_wg0
 wg_consolidate_clients
-
 nginx-setup
 
 if [[ $# -ge 1 && -x $(which $1 2>&-) ]]; then
